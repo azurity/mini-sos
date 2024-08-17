@@ -6,9 +6,19 @@ type GroupManager struct {
 	Instance map[node.HostID]Manager
 }
 
-func (man *GroupManager) Register(entry string, proc Provider, local bool) error {
+func (man *GroupManager) Register(entry string, proc Provider, id uint32, local bool) error {
 	for _, item := range man.Instance {
-		err := item.Register(entry, proc, local)
+		err := item.Register(entry, proc, id, local)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (man *GroupManager) Update(entry string, proc Provider, id uint32, local bool) error {
+	for _, item := range man.Instance {
+		err := item.Update(entry, proc, id, local)
 		if err != nil {
 			return err
 		}

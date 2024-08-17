@@ -24,6 +24,15 @@ const (
 	SignalKill
 )
 
+type Process interface {
+	Host() node.HostID
+	Id() uint32
+	WaitQuit()
+	Kill()
+	Run() error
+	CallProvider(id uint32, data []byte, caller service.Provider) ([]byte, error)
+}
+
 type Manager struct {
 	host            node.HostID
 	pidAllocateLock sync.RWMutex
@@ -45,16 +54,15 @@ func NewManager(host node.HostID, callFn func(entry string, data []byte, proc se
 }
 
 func (man *Manager) allocate() (uint32, error) {
-	man.pidAllocateLock.RLock()
+	man.pidAllocateLock.Lock()
+	defer man.pidAllocateLock.Unlock()
 	if len(man.AliveProcess) == 0x100000000 {
 		man.pidAllocateLock.RUnlock()
 		return 0, ErrFullOfProcess
 	}
-	man.pidAllocateLock.RUnlock()
-	man.pidAllocateLock.Lock()
-	defer man.pidAllocateLock.Unlock()
 	for {
 		if _, ok := man.AliveProcess[man.currentId]; !ok {
+			man.AliveProcess[man.currentId] = nil
 			return man.currentId, nil
 		}
 		man.currentId += 1
@@ -69,27 +77,27 @@ func (man *Manager) release(pid uint32) {
 
 type RegisterArgs struct {
 	Service  string `msgpack:"service"`
-	Function string `msgpack:"function"`
+	Provider uint32 `msgpack:"provider"`
 }
 
 type UnregisterArgs struct {
 	Service string `msgpack:"service"`
 }
 
-func (man *Manager) InitServiceProcess(serviceMan service.Manager) (*DummyProcess, error) {
-	serviceProc, err := man.NewDummyProcess()
+func (man *Manager) InitServiceProcess(serviceMan service.Manager) (*NativeProcess, error) {
+	serviceProc, err := man.NewNativeProcess(Dummy)
 	if err != nil {
 		return nil, err
 	}
 
-	serviceProc.Providers["/service/register"] = func(data []byte, caller service.Provider) ([]byte, error) {
+	registerFn, _ := serviceProc.providers.New(func(data []byte, caller service.Provider) ([]byte, error) {
 		args := RegisterArgs{}
 		err := msgpack.Unmarshal(data, &args)
 		if err != nil {
 			log.Println(err)
 			return nil, err
 		}
-		err = serviceMan.Register(args.Service, caller, false)
+		err = serviceMan.Register(args.Service, caller, args.Provider, false)
 		if err != nil {
 			log.Println(err)
 			return nil, err
@@ -99,14 +107,32 @@ func (man *Manager) InitServiceProcess(serviceMan service.Manager) (*DummyProces
 			log.Println(err)
 			return nil, err
 		}
-		if proc, ok := caller.(*LocalProcess); ok {
-			proc.channelMap[args.Service] = args.Function
+		return ret, nil
+	})
+	serviceMan.Register("/service/register", serviceProc, registerFn, true)
+
+	updateFn, _ := serviceProc.providers.New(func(data []byte, caller service.Provider) ([]byte, error) {
+		args := RegisterArgs{}
+		err := msgpack.Unmarshal(data, &args)
+		if err != nil {
+			log.Println(err)
+			return nil, err
+		}
+		err = serviceMan.Update(args.Service, caller, args.Provider, false)
+		if err != nil {
+			log.Println(err)
+			return nil, err
+		}
+		ret, err := msgpack.Marshal(true)
+		if err != nil {
+			log.Println(err)
+			return nil, err
 		}
 		return ret, nil
-	}
-	serviceMan.Register("/service/register", serviceProc, true)
+	})
+	serviceMan.Register("/service/update", serviceProc, updateFn, true)
 
-	serviceProc.Providers["/service/unregister"] = func(data []byte, caller service.Provider) ([]byte, error) {
+	unregisterFn, _ := serviceProc.providers.New(func(data []byte, caller service.Provider) ([]byte, error) {
 		args := UnregisterArgs{}
 		err := msgpack.Unmarshal(data, &args)
 		if err != nil {
@@ -120,10 +146,10 @@ func (man *Manager) InitServiceProcess(serviceMan service.Manager) (*DummyProces
 			return nil, err
 		}
 		return ret, nil
-	}
-	serviceMan.Register("/service/unregister", serviceProc, true)
+	})
+	serviceMan.Register("/service/unregister", serviceProc, unregisterFn, true)
 
-	serviceProc.Providers["/service/list"] = func(data []byte, caller service.Provider) ([]byte, error) {
+	listFn, _ := serviceProc.providers.New(func(data []byte, caller service.Provider) ([]byte, error) {
 		list := serviceMan.List(false)
 		ret, err := msgpack.Marshal(list)
 		if err != nil {
@@ -131,8 +157,8 @@ func (man *Manager) InitServiceProcess(serviceMan service.Manager) (*DummyProces
 			return nil, err
 		}
 		return ret, nil
-	}
-	serviceMan.Register("/service/list", serviceProc, true)
+	})
+	serviceMan.Register("/service/list", serviceProc, listFn, true)
 
 	return serviceProc, nil
 }

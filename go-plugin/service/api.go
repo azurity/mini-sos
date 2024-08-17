@@ -6,7 +6,7 @@ import "github.com/azurity/mini-sos/go-plugin/api"
 
 type RegisterArgs struct {
 	Service  string `msg:"service"`
-	Function string `msg:"function"`
+	Provider uint32 `msg:"provider"`
 }
 
 type UnregisterArgs struct {
@@ -17,10 +17,18 @@ type Void struct{}
 
 type ServiceListRet []string
 
-func Register(entry string, fn string) bool {
+func Register(entry string, provider uint32) bool {
 	_, err := api.CallService[Void]("/service/register", &RegisterArgs{
 		Service:  entry,
-		Function: fn,
+		Provider: provider,
+	})
+	return err != nil
+}
+
+func Update(entry string, provider uint32) bool {
+	_, err := api.CallService[Void]("/service/update", &RegisterArgs{
+		Service:  entry,
+		Provider: provider,
 	})
 	return err != nil
 }

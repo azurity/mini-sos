@@ -30,10 +30,10 @@ func (z *RegisterArgs) DecodeMsg(dc *msgp.Reader) (err error) {
 				err = msgp.WrapError(err, "Service")
 				return
 			}
-		case "function":
-			z.Function, err = dc.ReadString()
+		case "provider":
+			z.Provider, err = dc.ReadUint32()
 			if err != nil {
-				err = msgp.WrapError(err, "Function")
+				err = msgp.WrapError(err, "Provider")
 				return
 			}
 		default:
@@ -60,14 +60,14 @@ func (z RegisterArgs) EncodeMsg(en *msgp.Writer) (err error) {
 		err = msgp.WrapError(err, "Service")
 		return
 	}
-	// write "function"
-	err = en.Append(0xa8, 0x66, 0x75, 0x6e, 0x63, 0x74, 0x69, 0x6f, 0x6e)
+	// write "provider"
+	err = en.Append(0xa8, 0x70, 0x72, 0x6f, 0x76, 0x69, 0x64, 0x65, 0x72)
 	if err != nil {
 		return
 	}
-	err = en.WriteString(z.Function)
+	err = en.WriteUint32(z.Provider)
 	if err != nil {
-		err = msgp.WrapError(err, "Function")
+		err = msgp.WrapError(err, "Provider")
 		return
 	}
 	return
@@ -80,9 +80,9 @@ func (z RegisterArgs) MarshalMsg(b []byte) (o []byte, err error) {
 	// string "service"
 	o = append(o, 0x82, 0xa7, 0x73, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65)
 	o = msgp.AppendString(o, z.Service)
-	// string "function"
-	o = append(o, 0xa8, 0x66, 0x75, 0x6e, 0x63, 0x74, 0x69, 0x6f, 0x6e)
-	o = msgp.AppendString(o, z.Function)
+	// string "provider"
+	o = append(o, 0xa8, 0x70, 0x72, 0x6f, 0x76, 0x69, 0x64, 0x65, 0x72)
+	o = msgp.AppendUint32(o, z.Provider)
 	return
 }
 
@@ -110,10 +110,10 @@ func (z *RegisterArgs) UnmarshalMsg(bts []byte) (o []byte, err error) {
 				err = msgp.WrapError(err, "Service")
 				return
 			}
-		case "function":
-			z.Function, bts, err = msgp.ReadStringBytes(bts)
+		case "provider":
+			z.Provider, bts, err = msgp.ReadUint32Bytes(bts)
 			if err != nil {
-				err = msgp.WrapError(err, "Function")
+				err = msgp.WrapError(err, "Provider")
 				return
 			}
 		default:
@@ -130,7 +130,7 @@ func (z *RegisterArgs) UnmarshalMsg(bts []byte) (o []byte, err error) {
 
 // Msgsize returns an upper bound estimate of the number of bytes occupied by the serialized message
 func (z RegisterArgs) Msgsize() (s int) {
-	s = 1 + 8 + msgp.StringPrefixSize + len(z.Service) + 9 + msgp.StringPrefixSize + len(z.Function)
+	s = 1 + 8 + msgp.StringPrefixSize + len(z.Service) + 9 + msgp.Uint32Size
 	return
 }
 

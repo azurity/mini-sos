@@ -20,22 +20,25 @@ type Part interface {
 }
 
 type LocalPart struct {
-	hostId     node.HostID
-	service    *service.LocalManager
-	processMan *process.Manager
+	hostId       node.HostID
+	service      *service.LocalManager
+	totalService service.Manager
+	processMan   *process.Manager
 }
 
-func newLocalPart(host node.HostID, totalService service.Manager) (*LocalPart, error) {
-	service := service.NewLocalManager()
+func newLocalPart(host node.HostID, totalService *service.GroupManager) (*LocalPart, error) {
+	localService := service.NewLocalManager()
+	totalService.Instance[host] = localService
 	man := process.NewManager(host, totalService.Call)
 	_, err := man.InitServiceProcess(totalService)
 	if err != nil {
 		return nil, err
 	}
 	return &LocalPart{
-		hostId:     host,
-		service:    service,
-		processMan: man,
+		hostId:       host,
+		service:      localService,
+		totalService: totalService,
+		processMan:   man,
 	}, nil
 }
 
@@ -53,13 +56,17 @@ func (part *LocalPart) NewProcess(data []byte) (process.Process, error) {
 	return part.processMan.NewLocalProcess(data)
 }
 
+func (part *LocalPart) NewNativeProcess(init func(ctx context.Context, op *process.NativeOperator) func() error) (process.Process, error) {
+	return part.processMan.NewNativeProcess(init)
+}
+
 type remoteService struct {
 	node      node.Node
 	workspace WSID
 	services  map[string]uint32
 }
 
-func (service *remoteService) Register(entry string, proc service.Provider, local bool) error {
+func (service *remoteService) Register(entry string, proc service.Provider, id uint32, local bool) error {
 	if local {
 		return nil
 	}
@@ -73,6 +80,10 @@ func (service *remoteService) Register(entry string, proc service.Provider, loca
 	}
 	_, err = service.node.Call("registerService", data)
 	return err
+}
+
+func (service *remoteService) Update(entry string, proc service.Provider, id uint32, local bool) error {
+	return nil
 }
 
 func (service *remoteService) Unregister(entry string, proc service.Provider, local bool) {
@@ -139,11 +150,7 @@ func (proc *remoteProcess) Kill() {
 	// TODO: kill remote proc
 }
 
-func (proc *remoteProcess) ExitCode() uint32 {
-	return 0
-}
-
-func (proc *remoteProcess) CallService(service string, data []byte, caller service.Provider) ([]byte, error) {
+func (proc *remoteProcess) CallProvider(id uint32, data []byte, caller service.Provider) ([]byte, error) {
 	return nil, ErrDirectCallRemoteProcess
 }
 

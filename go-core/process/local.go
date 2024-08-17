@@ -2,37 +2,23 @@ package process
 
 import (
 	"context"
-	"encoding/binary"
-	"fmt"
+	"errors"
 	"log"
 	"sync"
-	"sync/atomic"
 
-	"github.com/azurity/mini-sos/go-core/message"
 	"github.com/azurity/mini-sos/go-core/node"
 	"github.com/azurity/mini-sos/go-core/service"
 	extism "github.com/extism/go-sdk"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
-type Process interface {
-	Host() node.HostID
-	Id() uint32
-	WaitQuit()
-	Kill()
-	Run() error
-	ExitCode() uint32
-}
-
 type LocalProcess struct {
-	host       node.HostID
-	pid        uint32
-	plugin     *extism.Plugin
-	running    uint32
-	exitCode   atomic.Uint32
-	Messages   chan message.Message
-	channelMap map[string]string
-	quit       sync.WaitGroup
-	man        *Manager
+	host    node.HostID
+	pid     uint32
+	plugin  *extism.Plugin
+	running uint32
+	quit    sync.WaitGroup
+	man     *Manager
 }
 
 func (man *Manager) NewLocalProcess(data []byte) (*LocalProcess, error) {
@@ -49,15 +35,12 @@ func (man *Manager) NewLocalProcess(data []byte) (*LocalProcess, error) {
 	}
 
 	proc := &LocalProcess{
-		host:       man.host,
-		pid:        pid,
-		plugin:     nil,
-		running:    RunStateReady,
-		exitCode:   atomic.Uint32{},
-		Messages:   make(chan message.Message),
-		channelMap: map[string]string{},
-		quit:       sync.WaitGroup{},
-		man:        man,
+		host:    man.host,
+		pid:     pid,
+		plugin:  nil,
+		running: RunStateReady,
+		quit:    sync.WaitGroup{},
+		man:     man,
 	}
 
 	ctx := context.Background()
@@ -71,6 +54,7 @@ func (man *Manager) NewLocalProcess(data []byte) (*LocalProcess, error) {
 	}
 	proc.plugin = plugin
 
+	man.AliveProcess[pid] = proc
 	proc.quit.Add(1)
 	if man.CreateCallback != nil {
 		man.CreateCallback(proc.pid)
@@ -91,11 +75,8 @@ func (proc *LocalProcess) WaitQuit() {
 }
 
 func (proc *LocalProcess) Kill() {
+	// TODO: maybe need a grace kill
 	proc.plugin.Close()
-}
-
-func (proc *LocalProcess) ExitCode() uint32 {
-	return proc.exitCode.Load()
 }
 
 func (proc *LocalProcess) createHostFunctions(man *Manager) []extism.HostFunction {
@@ -129,55 +110,38 @@ func (proc *LocalProcess) createHostFunctions(man *Manager) []extism.HostFunctio
 			}
 		},
 		[]extism.ValueType{extism.ValueTypePTR, extism.ValueTypePTR},
-		[]extism.ValueType{extism.ValueTypePTR},
+		[]extism.ValueType{extism.ValueTypeI64},
 	)
 	return []extism.HostFunction{callService}
 }
 
 func (proc *LocalProcess) execute(fn string, data []byte) ([]byte, error) {
 	exit, result, err := proc.plugin.Call(fn, data)
+	if err != nil {
+		return []byte{}, err
+	}
 	if exit != 0 {
-		proc.exitCode.CompareAndSwap(0, exit)
+		err = errors.New(proc.plugin.GetError())
 	}
 	return result, err
 }
 
-func (proc *LocalProcess) messageChannel() {
-	for {
-		msg := <-proc.Messages
-		if msg.Slot == fmt.Sprintf("process/%d/signal", proc.pid) {
-			if len(msg.Data) == 4 && binary.LittleEndian.Uint32(msg.Data) == SignalKill {
-				proc.plugin.Close()
-				proc.running = RunStateExit
-				break
-			}
-		}
-		if fn, ok := proc.channelMap[msg.Slot]; ok {
-			ret, err := proc.execute(fn, msg.Data)
-			msg.Callback(ret, err)
-		}
-		if msg.Slot == fmt.Sprintf("process/%d/signal", proc.pid) {
-			if len(msg.Data) == 4 && binary.LittleEndian.Uint32(msg.Data) == SignalExit {
-				break
-			}
-		}
-	}
-	proc.quit.Done()
-	proc.man.release(proc.pid)
-}
-
 func (proc *LocalProcess) Run() error {
-	go proc.messageChannel()
 	proc.running = RunStateRunning
 	_, err := proc.execute("_sos_entry", nil)
 	proc.running = RunStateExit
 	return err
 }
 
-func (proc *LocalProcess) CallService(service string, data []byte, caller service.Provider) ([]byte, error) {
-	fn, ok := proc.channelMap[service]
-	if !ok {
-		return nil, ErrNotFound
+type ProviderArg struct {
+	Id   uint32 `msgpack:"id"`
+	Data []byte `msgpack:"data"`
+}
+
+func (proc *LocalProcess) CallProvider(id uint32, data []byte, caller service.Provider) ([]byte, error) {
+	raw, err := msgpack.Marshal(ProviderArg{Id: id, Data: data})
+	if err != nil {
+		return []byte{}, err
 	}
-	return proc.execute(fn, data)
+	return proc.execute("_sos_call", raw)
 }

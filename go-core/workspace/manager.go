@@ -110,7 +110,7 @@ func (man *Manager) extendWorkspace(arg []byte, caller node.HostID) ([]byte, err
 	// get ws
 	ws, ok := man.Workspaces[parsedArg.Workspace]
 	if !ok {
-		ws, err = man.NewWorkspace(parsedArg.Workspace)
+		ws, err = man.newWorkspace(parsedArg.Workspace)
 		if err != nil {
 			return nil, err
 		}

@@ -18,7 +18,11 @@ type Workspace struct {
 	parts   map[node.HostID]*RemotePart
 }
 
-func (man *Manager) NewWorkspace(preAllocatedId WSID) (*Workspace, error) {
+func (man *Manager) NewWorkspace() (*Workspace, error) {
+	return man.newWorkspace(uuid.Nil)
+}
+
+func (man *Manager) newWorkspace(preAllocatedId WSID) (*Workspace, error) {
 	host := man.network.HostId
 	id, err := uuid.NewUUID()
 	if err != nil {
@@ -40,7 +44,6 @@ func (man *Manager) NewWorkspace(preAllocatedId WSID) (*Workspace, error) {
 		return nil, err
 	}
 	ws.local = local
-	ws.service.Instance[host] = local.service
 	man.Workspaces[id] = ws
 
 	local.processMan.CreateCallback = func(pid uint32) {
@@ -72,7 +75,7 @@ func (workspace *Workspace) Id() WSID {
 	return workspace.id
 }
 
-func (workspace *Workspace) Local() Part {
+func (workspace *Workspace) Local() *LocalPart {
 	return workspace.local
 }
 
