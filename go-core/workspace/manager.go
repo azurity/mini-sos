@@ -27,8 +27,9 @@ type processArg struct {
 }
 
 type extendWorkspaceArg struct {
-	Workspace WSID          `msgpack:"workspace"`
-	Parts     []node.HostID `msgpack:"parts"`
+	Workspace WSID           `msgpack:"workspace"`
+	Parts     []node.HostID  `msgpack:"parts"`
+	Sync      *tree.Transfer `msgpack:"desc"`
 }
 
 type serviceArg struct {
@@ -77,10 +78,6 @@ func NewManager(network *node.Manager) *Manager {
 	network.Callback["callService"] = man.callService
 	network.Callback["callBroadcast"] = man.callBroadcast
 	network.Callback["lockAction"] = man.lockAction
-	// network.Callback["registerService"] = man.registerService
-	// network.Callback["unregisterService"] = man.unregisterService
-	// network.Callback["listService"] = man.listService
-	// network.Callback["callService"] = man.callService
 	return man
 }
 
@@ -127,12 +124,23 @@ func (man *Manager) extendWorkspace(arg []byte, caller node.HostID) ([]byte, err
 		remotes = append(remotes, remote)
 	}
 	// get ws
+	isNew := false
 	ws, ok := man.Workspaces[parsedArg.Workspace]
 	if !ok {
 		ws, err = man.newWorkspace(parsedArg.Workspace)
 		if err != nil {
 			return nil, err
 		}
+		isNew = true
+	}
+	// sync service
+	_, err = ws.service.Sync(parsedArg.Sync)
+	if err != nil {
+		if isNew {
+			ws.closeImpl()
+			delete(man.Workspaces, parsedArg.Workspace)
+		}
+		return nil, err
 	}
 	// sync parts
 	for _, remote := range remotes {
@@ -166,31 +174,6 @@ func (man *Manager) extendWorkspace(arg []byte, caller node.HostID) ([]byte, err
 				}
 			}
 		}
-		// sync service
-		// TODO:
-		// data, err = part.node.Call("listService", []byte{})
-		// if err == nil {
-		// 	res := []string{}
-		// 	err := msgpack.Unmarshal(data, &res)
-		// 	if err == nil {
-		// 		entryMap := map[string]bool{}
-		// 		for _, entry := range res {
-		// 			entryMap[entry] = true
-		// 			if _, ok := part.service.services[entry]; !ok {
-		// 				part.service.services[entry] = 0
-		// 			}
-		// 		}
-		// 		removes := []string{}
-		// 		for entry := range part.service.services {
-		// 			if _, ok := entryMap[entry]; !ok {
-		// 				removes = append(removes, entry)
-		// 			}
-		// 		}
-		// 		for _, entry := range removes {
-		// 			delete(part.service.services, entry)
-		// 		}
-		// 	}
-		// }
 	}
 	return []byte{}, nil
 }
@@ -249,42 +232,6 @@ func (man *Manager) syncProcess(arg []byte, caller node.HostID) ([]byte, error) 
 	}
 	return msgpack.Marshal(list)
 }
-
-// func (man *Manager) registerService(arg []byte, caller node.HostID) ([]byte, error) {
-// 	parsedArg := serviceArg{}
-// 	err := msgpack.Unmarshal(arg, &parsedArg)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	ws, ok := man.Workspaces[parsedArg.Workspace]
-// 	if !ok {
-// 		return nil, ErrUnknownWorkspace
-// 	}
-// 	part, ok := ws.parts[caller]
-// 	if !ok {
-// 		return nil, ErrUnknownRemote
-// 	}
-// 	part.service.services[parsedArg.Entry] = parsedArg.Process
-// 	return nil, err
-// }
-
-// func (man *Manager) unregisterService(arg []byte, caller node.HostID) ([]byte, error) {
-// 	parsedArg := serviceArg{}
-// 	err := msgpack.Unmarshal(arg, &parsedArg)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	ws, ok := man.Workspaces[parsedArg.Workspace]
-// 	if !ok {
-// 		return nil, ErrUnknownWorkspace
-// 	}
-// 	part, ok := ws.parts[caller]
-// 	if !ok {
-// 		return nil, ErrUnknownRemote
-// 	}
-// 	delete(part.service.services, parsedArg.Entry)
-// 	return nil, err
-// }
 
 func (man *Manager) syncService(arg []byte, caller node.HostID) ([]byte, error) {
 	parsedArg := serviceArg{}

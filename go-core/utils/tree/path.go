@@ -59,14 +59,6 @@ func (path Path) Str() string {
 	return ret
 }
 
-// func (path Path) Parent() Path {
-// 	if len(path) == 0 {
-// 		return Path{}
-// 	} else {
-// 		return append(Path{}, path[:len(path)-1]...)
-// 	}
-// }
-
 func Join(path ...Path) Path {
 	ret := Path{}
 	for _, item := range path {

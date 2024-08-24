@@ -51,6 +51,7 @@ func (man *Manager) newWorkspace(preAllocatedId WSID) (*Workspace, error) {
 	}); err != nil {
 		return nil, err
 	}
+	man.Workspaces[id] = ws
 	return ws, nil
 }
 
@@ -176,6 +177,7 @@ func (workspace *Workspace) Close() {
 		}
 	}
 	workspace.closeImpl()
+	delete(workspace.man.Workspaces, workspace.id)
 }
 
 func (workspace *Workspace) closeImpl() {
