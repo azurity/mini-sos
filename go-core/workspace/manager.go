@@ -52,6 +52,12 @@ type broadcastArg struct {
 	Data      []byte    `msgpack:"data"`
 }
 
+type lockArg struct {
+	Workspace WSID   `msgpack:"workspace"`
+	Lock      string `msgpack:"lock"`
+	Action    bool   `msgpack:"action"`
+}
+
 func NewManager(network *node.Manager) *Manager {
 	man := &Manager{
 		Workspaces: map[WSID]*Workspace{},
@@ -70,6 +76,7 @@ func NewManager(network *node.Manager) *Manager {
 	network.Callback["syncService"] = man.syncService
 	network.Callback["callService"] = man.callService
 	network.Callback["callBroadcast"] = man.callBroadcast
+	network.Callback["lockAction"] = man.lockAction
 	// network.Callback["registerService"] = man.registerService
 	// network.Callback["unregisterService"] = man.unregisterService
 	// network.Callback["listService"] = man.listService
@@ -340,4 +347,18 @@ func (man *Manager) callBroadcast(arg []byte, caller node.HostID) ([]byte, error
 		return nil, ErrUnknownProcess
 	}
 	return ws.service.CallService(parsedArg.Entry, parsedArg.Cap, parsedArg.Data, callerProc)
+}
+
+func (man *Manager) lockAction(arg []byte, caller node.HostID) ([]byte, error) {
+	parsedArg := lockArg{}
+	err := msgpack.Unmarshal(arg, &parsedArg)
+	if err != nil {
+		return nil, err
+	}
+	ws, ok := man.Workspaces[parsedArg.Workspace]
+	if !ok {
+		return nil, ErrUnknownWorkspace
+	}
+	ret := ws.service.LockAction(parsedArg.Lock, caller, parsedArg.Action)
+	return msgpack.Marshal(ret)
 }

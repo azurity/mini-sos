@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"sync"
 
 	"github.com/azurity/mini-sos/go-core/node"
 	"github.com/azurity/mini-sos/go-core/process"
@@ -50,31 +51,42 @@ type callBroadcast func(entry string, cap uuid.UUID, data []byte, caller CallerI
 
 type remoteCaller func(caller CallerInfo) (process.Process, error)
 
+type lockFn func(path string) bool
+
 type Manager struct {
 	tree          *tree.MountTree
+	lockTree      *lockTree[uuid.UUID]
 	rootService   *serviceTree
 	host          node.HostID
 	procMan       *process.Manager
 	callRemote    callRemote
 	callBroadcast callBroadcast
 	remoteCaller  remoteCaller
+	lockFn        lockFn
+	unlockFn      lockFn
 	initChan      chan bool
 }
 
 func NewManager(host node.HostID) *Manager {
 	ret := &Manager{
-		tree:     tree.NewMountTree(tree.NewBasicTree(tree.NewPath("/"))),
+		tree: tree.NewMountTree(tree.NewBasicTree(tree.NewPath("/"))),
+		lockTree: &lockTree[uuid.UUID]{
+			locks: map[string]uuid.UUID{},
+			mtx:   sync.Mutex{},
+		},
 		host:     host,
 		initChan: make(chan bool),
 	}
 	return ret
 }
 
-func (man *Manager) Init(procMan *process.Manager, callRemote callRemote, callBroadcast callBroadcast, remoteCaller remoteCaller) error {
+func (man *Manager) Init(procMan *process.Manager, callRemote callRemote, callBroadcast callBroadcast, remoteCaller remoteCaller, lockFn lockFn, unlockFn lockFn) error {
 	man.procMan = procMan
 	man.callRemote = callRemote
 	man.callBroadcast = callBroadcast
 	man.remoteCaller = remoteCaller
+	man.lockFn = lockFn
+	man.unlockFn = unlockFn
 	proc, err := procMan.NewNativeProcess(man.process)
 	if err != nil {
 		return err
@@ -167,6 +179,14 @@ func (man *Manager) Sync(info *tree.Transfer) (*tree.Transfer, error) {
 	return nil, nil
 }
 
+func (man *Manager) LockAction(path string, host uuid.UUID, action bool) bool {
+	if action {
+		return man.lockTree.Lock(path, host)
+	} else {
+		return man.lockTree.Unlock(path, host)
+	}
+}
+
 func addTypedCap[Arg any, Ret any](man *Manager, op *process.NativeOperator, entrypoint *serviceTree, cap uuid.UUID, fn func(arg *Arg, caller process.Process) (*Ret, error)) error {
 	id, err := op.ProviderManager().New(process.TypedProvider(fn))
 	if err != nil {
@@ -248,6 +268,15 @@ func (man *Manager) register(arg *structs.RegisterReq, caller process.Process) (
 	if path.IsRel() || len(path) == 0 {
 		return structs.NewErr(fs.ErrInvalid), nil
 	}
+	lockStr := path.Str()
+	if !man.lockTree.Lock(lockStr, man.host) {
+		return structs.NewErr(ErrOccupied), nil
+	}
+	defer man.lockTree.Unlock(lockStr, man.host)
+	if !man.lockFn(lockStr) {
+		return structs.NewErr(ErrOccupied), nil
+	}
+	defer man.unlockFn(lockStr)
 	node := NewServiceTree(path, man.callFn, arg.Local)
 	relPath, _ := tree.Rel(path, tree.Path{})
 	// TODO: checker auth here, except pid:0
@@ -270,6 +299,15 @@ func (man *Manager) unregister(arg *structs.UnregisterReq, caller process.Proces
 	if path.IsRel() || len(path) == 0 {
 		return structs.NewErr(fs.ErrInvalid), nil
 	}
+	lockStr := path.Str()
+	if !man.lockTree.Lock(lockStr, man.host) {
+		return structs.NewErr(ErrOccupied), nil
+	}
+	defer man.lockTree.Unlock(lockStr, man.host)
+	if !man.lockFn(lockStr) {
+		return structs.NewErr(ErrOccupied), nil
+	}
+	defer man.unlockFn(lockStr)
 	relPath, _ := tree.Rel(path, tree.Path{})
 	// TODO: checker auth here, except pid:0
 	err := man.tree.Remove(relPath, false, newCaller(caller))
@@ -291,6 +329,15 @@ func (man *Manager) addCap(arg *structs.AddCapReq, caller process.Process) (*str
 	if path.IsRel() || len(path) == 0 {
 		return structs.NewErr(fs.ErrInvalid), nil
 	}
+	lockStr := path.Str()
+	if !man.lockTree.Lock(lockStr, man.host) {
+		return structs.NewErr(ErrOccupied), nil
+	}
+	defer man.lockTree.Unlock(lockStr, man.host)
+	if !man.lockFn(lockStr) {
+		return structs.NewErr(ErrOccupied), nil
+	}
+	defer man.unlockFn(lockStr)
 	relPath, _ := tree.Rel(path, tree.Path{})
 	node, err := man.tree.Find(relPath, newCaller(caller))
 	if err != nil {
@@ -327,6 +374,15 @@ func (man *Manager) delCap(arg *structs.DelCapReq, caller process.Process) (*str
 	if path.IsRel() || len(path) == 0 {
 		return structs.NewErr(fs.ErrInvalid), nil
 	}
+	lockStr := path.Str()
+	if !man.lockTree.Lock(lockStr, man.host) {
+		return structs.NewErr(ErrOccupied), nil
+	}
+	defer man.lockTree.Unlock(lockStr, man.host)
+	if !man.lockFn(lockStr) {
+		return structs.NewErr(ErrOccupied), nil
+	}
+	defer man.unlockFn(lockStr)
 	relPath, _ := tree.Rel(path, tree.Path{})
 	node, err := man.tree.Find(relPath, newCaller(caller))
 	if err != nil {
@@ -412,6 +468,15 @@ func (man *Manager) setDir(arg *structs.SetDirReq, caller process.Process) (*str
 	if base.IsRel() || !path.IsRel() {
 		return &structs.SetDirRes{Error: structs.NewErr(fs.ErrInvalid)}, nil
 	}
+	lockStr := tree.Join(base, path).Str()
+	if !man.lockTree.Lock(lockStr, man.host) {
+		return &structs.SetDirRes{Error: structs.NewErr(ErrOccupied)}, nil
+	}
+	defer man.lockTree.Unlock(lockStr, man.host)
+	if !man.lockFn(lockStr) {
+		return &structs.SetDirRes{Error: structs.NewErr(ErrOccupied)}, nil
+	}
+	defer man.unlockFn(lockStr)
 	relPath, _ := tree.Rel(base, tree.Path{})
 	node, err := man.tree.Find(relPath, newCaller(caller))
 	if err != nil {

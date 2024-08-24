@@ -44,26 +44,54 @@ func (man *Manager) newWorkspace(preAllocatedId WSID) (*Workspace, error) {
 	}
 	ws.service = service.NewManager(host)
 	ws.processes = process.NewManager(host, ws.service.CallService)
-	if err := ws.service.Init(ws.processes, ws.callRemoteProvider, ws.callBroadcast, ws.newRemoteProcess); err != nil {
+	if err := ws.service.Init(ws.processes, ws.callRemoteProvider, ws.callBroadcast, ws.newRemoteProcess, func(path string) bool {
+		return ws.lockAction(path, true)
+	}, func(path string) bool {
+		return ws.lockAction(path, false)
+	}); err != nil {
 		return nil, err
 	}
 	return ws, nil
 }
 
 func (workspace *Workspace) callBroadcast(entry string, cap uuid.UUID, data []byte, caller service.CallerInfo) {
+	arg := broadcastArg{
+		Workspace: workspace.id,
+		Entry:     entry,
+		Cap:       cap,
+		Caller:    caller.Process,
+		Data:      data,
+	}
+	raw, _ := msgpack.Marshal(arg)
 	for id := range workspace.parts {
 		if node, ok := workspace.man.network.Nodes[id]; ok {
-			arg := broadcastArg{
-				Workspace: workspace.id,
-				Entry:     entry,
-				Cap:       cap,
-				Caller:    caller.Process,
-				Data:      data,
-			}
-			data, _ := msgpack.Marshal(arg)
-			node.Call("callBroadcast", data)
+			node.Call("callBroadcast", raw)
 		}
 	}
+}
+
+func (workspace *Workspace) lockAction(lock string, action bool) bool {
+	arg := lockArg{
+		Workspace: workspace.id,
+		Lock:      lock,
+		Action:    action,
+	}
+	data, _ := msgpack.Marshal(arg)
+	ret := true
+	for id := range workspace.parts {
+		if node, ok := workspace.man.network.Nodes[id]; ok {
+			res, err := node.Call("lockAction", data)
+			if err != nil {
+				return false
+			}
+			var result bool
+			msgpack.Unmarshal(res, &result)
+			ret = result
+		} else {
+			ret = false
+		}
+	}
+	return ret
 }
 
 func (workspace *Workspace) callRemoteProvider(host node.HostID, process uint32, provider uint32, data []byte, caller service.CallerInfo) ([]byte, error) {
