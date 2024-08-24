@@ -7,8 +7,8 @@ import (
 	"sync"
 
 	"github.com/azurity/mini-sos/go-core/node"
-	"github.com/azurity/mini-sos/go-core/service"
 	extism "github.com/extism/go-sdk"
+	"github.com/google/uuid"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -89,15 +89,28 @@ func (proc *LocalProcess) createHostFunctions(man *Manager) []extism.HostFunctio
 				log.Println(err)
 				return
 			}
-			var data []byte
+			var cap uuid.UUID
 			if stack[1] != 0 {
-				data, err = p.ReadBytes(stack[1])
+				capRaw, err := p.ReadBytes(stack[1])
+				if err != nil {
+					log.Println(err)
+					return
+				}
+				cap, err = uuid.FromBytes(capRaw)
 				if err != nil {
 					log.Println(err)
 					return
 				}
 			}
-			ret, err := man.callFn(serviceName, data, proc)
+			var data []byte
+			if stack[2] != 0 {
+				data, err = p.ReadBytes(stack[2])
+				if err != nil {
+					log.Println(err)
+					return
+				}
+			}
+			ret, err := man.callFn(serviceName, cap, data, proc)
 			if err != nil {
 				log.Println(err)
 				return
@@ -109,7 +122,7 @@ func (proc *LocalProcess) createHostFunctions(man *Manager) []extism.HostFunctio
 				return
 			}
 		},
-		[]extism.ValueType{extism.ValueTypePTR, extism.ValueTypePTR},
+		[]extism.ValueType{extism.ValueTypePTR, extism.ValueTypePTR, extism.ValueTypePTR},
 		[]extism.ValueType{extism.ValueTypeI64},
 	)
 	return []extism.HostFunction{callService}
@@ -134,12 +147,19 @@ func (proc *LocalProcess) Run() error {
 }
 
 type ProviderArg struct {
-	Id   uint32 `msgpack:"id"`
-	Data []byte `msgpack:"data"`
+	Id         uint32   `msgpack:"id"`
+	CallerHost [16]byte `msgpack:"caller_host"`
+	CallerId   uint32   `msgpack:"caller_id"`
+	Data       []byte   `msgpack:"data"`
 }
 
-func (proc *LocalProcess) CallProvider(id uint32, data []byte, caller service.Provider) ([]byte, error) {
-	raw, err := msgpack.Marshal(ProviderArg{Id: id, Data: data})
+func (proc *LocalProcess) CallProvider(id uint32, data []byte, caller Process) ([]byte, error) {
+	raw, err := msgpack.Marshal(ProviderArg{
+		Id:         id,
+		CallerHost: caller.Host(),
+		CallerId:   caller.Id(),
+		Data:       data,
+	})
 	if err != nil {
 		return []byte{}, err
 	}

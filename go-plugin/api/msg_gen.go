@@ -30,6 +30,18 @@ func (z *ProviderArg) DecodeMsg(dc *msgp.Reader) (err error) {
 				err = msgp.WrapError(err, "Id")
 				return
 			}
+		case "caller_host":
+			err = dc.ReadExactBytes((z.CallerHost)[:])
+			if err != nil {
+				err = msgp.WrapError(err, "CallerHost")
+				return
+			}
+		case "caller_id":
+			z.CallerId, err = dc.ReadUint32()
+			if err != nil {
+				err = msgp.WrapError(err, "CallerId")
+				return
+			}
 		case "data":
 			z.Data, err = dc.ReadBytes(z.Data)
 			if err != nil {
@@ -49,15 +61,35 @@ func (z *ProviderArg) DecodeMsg(dc *msgp.Reader) (err error) {
 
 // EncodeMsg implements msgp.Encodable
 func (z *ProviderArg) EncodeMsg(en *msgp.Writer) (err error) {
-	// map header, size 2
+	// map header, size 4
 	// write "id"
-	err = en.Append(0x82, 0xa2, 0x69, 0x64)
+	err = en.Append(0x84, 0xa2, 0x69, 0x64)
 	if err != nil {
 		return
 	}
 	err = en.WriteUint32(z.Id)
 	if err != nil {
 		err = msgp.WrapError(err, "Id")
+		return
+	}
+	// write "caller_host"
+	err = en.Append(0xab, 0x63, 0x61, 0x6c, 0x6c, 0x65, 0x72, 0x5f, 0x68, 0x6f, 0x73, 0x74)
+	if err != nil {
+		return
+	}
+	err = en.WriteBytes((z.CallerHost)[:])
+	if err != nil {
+		err = msgp.WrapError(err, "CallerHost")
+		return
+	}
+	// write "caller_id"
+	err = en.Append(0xa9, 0x63, 0x61, 0x6c, 0x6c, 0x65, 0x72, 0x5f, 0x69, 0x64)
+	if err != nil {
+		return
+	}
+	err = en.WriteUint32(z.CallerId)
+	if err != nil {
+		err = msgp.WrapError(err, "CallerId")
 		return
 	}
 	// write "data"
@@ -76,10 +108,16 @@ func (z *ProviderArg) EncodeMsg(en *msgp.Writer) (err error) {
 // MarshalMsg implements msgp.Marshaler
 func (z *ProviderArg) MarshalMsg(b []byte) (o []byte, err error) {
 	o = msgp.Require(b, z.Msgsize())
-	// map header, size 2
+	// map header, size 4
 	// string "id"
-	o = append(o, 0x82, 0xa2, 0x69, 0x64)
+	o = append(o, 0x84, 0xa2, 0x69, 0x64)
 	o = msgp.AppendUint32(o, z.Id)
+	// string "caller_host"
+	o = append(o, 0xab, 0x63, 0x61, 0x6c, 0x6c, 0x65, 0x72, 0x5f, 0x68, 0x6f, 0x73, 0x74)
+	o = msgp.AppendBytes(o, (z.CallerHost)[:])
+	// string "caller_id"
+	o = append(o, 0xa9, 0x63, 0x61, 0x6c, 0x6c, 0x65, 0x72, 0x5f, 0x69, 0x64)
+	o = msgp.AppendUint32(o, z.CallerId)
 	// string "data"
 	o = append(o, 0xa4, 0x64, 0x61, 0x74, 0x61)
 	o = msgp.AppendBytes(o, z.Data)
@@ -110,6 +148,18 @@ func (z *ProviderArg) UnmarshalMsg(bts []byte) (o []byte, err error) {
 				err = msgp.WrapError(err, "Id")
 				return
 			}
+		case "caller_host":
+			bts, err = msgp.ReadExactBytes(bts, (z.CallerHost)[:])
+			if err != nil {
+				err = msgp.WrapError(err, "CallerHost")
+				return
+			}
+		case "caller_id":
+			z.CallerId, bts, err = msgp.ReadUint32Bytes(bts)
+			if err != nil {
+				err = msgp.WrapError(err, "CallerId")
+				return
+			}
 		case "data":
 			z.Data, bts, err = msgp.ReadBytesBytes(bts, z.Data)
 			if err != nil {
@@ -130,6 +180,50 @@ func (z *ProviderArg) UnmarshalMsg(bts []byte) (o []byte, err error) {
 
 // Msgsize returns an upper bound estimate of the number of bytes occupied by the serialized message
 func (z *ProviderArg) Msgsize() (s int) {
-	s = 1 + 3 + msgp.Uint32Size + 5 + msgp.BytesPrefixSize + len(z.Data)
+	s = 1 + 3 + msgp.Uint32Size + 12 + msgp.ArrayHeaderSize + (16 * (msgp.ByteSize)) + 10 + msgp.Uint32Size + 5 + msgp.BytesPrefixSize + len(z.Data)
+	return
+}
+
+// DecodeMsg implements msgp.Decodable
+func (z *UUID) DecodeMsg(dc *msgp.Reader) (err error) {
+	err = dc.ReadExactBytes((z)[:])
+	if err != nil {
+		err = msgp.WrapError(err)
+		return
+	}
+	return
+}
+
+// EncodeMsg implements msgp.Encodable
+func (z *UUID) EncodeMsg(en *msgp.Writer) (err error) {
+	err = en.WriteBytes((z)[:])
+	if err != nil {
+		err = msgp.WrapError(err)
+		return
+	}
+	return
+}
+
+// MarshalMsg implements msgp.Marshaler
+func (z *UUID) MarshalMsg(b []byte) (o []byte, err error) {
+	o = msgp.Require(b, z.Msgsize())
+	o = msgp.AppendBytes(o, (z)[:])
+	return
+}
+
+// UnmarshalMsg implements msgp.Unmarshaler
+func (z *UUID) UnmarshalMsg(bts []byte) (o []byte, err error) {
+	bts, err = msgp.ReadExactBytes(bts, (z)[:])
+	if err != nil {
+		err = msgp.WrapError(err)
+		return
+	}
+	o = bts
+	return
+}
+
+// Msgsize returns an upper bound estimate of the number of bytes occupied by the serialized message
+func (z *UUID) Msgsize() (s int) {
+	s = msgp.ArrayHeaderSize + (16 * (msgp.ByteSize))
 	return
 }

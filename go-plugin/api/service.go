@@ -4,11 +4,12 @@ import (
 	"errors"
 
 	"github.com/extism/go-pdk"
+	"github.com/google/uuid"
 	"github.com/tinylib/msgp/msgp"
 )
 
 //go:wasmimport extism:host/user _sos_call_service
-func _sos_call_service(uint64, uint64) uint64
+func _sos_call_service(uint64, uint64, uint64) uint64
 
 var ErrorCallFailed = errors.New("call failed")
 
@@ -17,9 +18,11 @@ type typeHolder[T any] interface {
 	msgp.Unmarshaler
 }
 
-func CallService[T any, PT typeHolder[T]](service string, arg msgp.Marshaler) (PT, error) {
+func CallService[T any, PT typeHolder[T]](service string, cap uuid.UUID, arg msgp.Marshaler) (PT, error) {
 	servicePtr := pdk.AllocateString(service)
 	defer servicePtr.Free()
+	capPtr := pdk.AllocateBytes(cap[:])
+	defer capPtr.Free()
 	var dataPtr uint64 = 0
 	if arg != nil {
 		data, err := arg.MarshalMsg(nil)
@@ -30,7 +33,7 @@ func CallService[T any, PT typeHolder[T]](service string, arg msgp.Marshaler) (P
 		defer argPtr.Free()
 		dataPtr = argPtr.Offset()
 	}
-	retAddr := _sos_call_service(servicePtr.Offset(), dataPtr)
+	retAddr := _sos_call_service(servicePtr.Offset(), capPtr.Offset(), dataPtr)
 	if retAddr == 0 {
 		return nil, ErrorCallFailed
 	}

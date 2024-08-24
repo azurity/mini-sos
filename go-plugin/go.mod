@@ -4,6 +4,7 @@ go 1.22
 
 require (
 	github.com/extism/go-pdk v1.0.2
+	github.com/google/uuid v1.6.0
 	github.com/tinylib/msgp v1.2.0
 )
 

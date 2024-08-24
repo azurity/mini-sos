@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/extism/go-pdk"
+	"github.com/google/uuid"
 )
 
 var ErrFullOfProvider = errors.New("full of provider")
@@ -78,7 +79,12 @@ func (man *Manager[T]) Del(id uint32) {
 	man.release(id)
 }
 
-var ProviderManager = newManager[func(data []byte) ([]byte, error)]()
+type Caller struct {
+	Host uuid.UUID
+	Id   uint32
+}
+
+var ProviderManager = newManager[func(data []byte, caller Caller) ([]byte, error)]()
 
 //go:export _sos_call
 func _sos_call() int32 {
@@ -94,7 +100,7 @@ func _sos_call() int32 {
 		pdk.SetError(ErrNotExist)
 		return 1
 	}
-	data, err := (*fn)(arg.Data)
+	data, err := (*fn)(arg.Data, Caller{Host: uuid.Must(uuid.FromBytes(arg.CallerHost[:])), Id: arg.Id})
 	if err != nil {
 		pdk.SetError(err)
 		return 1

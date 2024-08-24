@@ -5,14 +5,16 @@ import (
 	"sync"
 
 	"github.com/azurity/mini-sos/go-core/node"
-	"github.com/azurity/mini-sos/go-core/service"
+	"github.com/azurity/mini-sos/go-core/utils/provider"
+	"github.com/google/uuid"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 type NativeProcess struct {
 	host      node.HostID
 	pid       uint32
 	quit      sync.WaitGroup
-	providers *ProviderManager[func(data []byte, caller service.Provider) ([]byte, error)]
+	providers *provider.ProviderManager[func(data []byte, caller Process) ([]byte, error)]
 	cancel    context.CancelFunc
 	run       func() error
 	quitFn    func()
@@ -23,12 +25,39 @@ type NativeOperator struct {
 	man  *Manager
 }
 
-func (op *NativeOperator) Call(service string, data []byte) ([]byte, error) {
-	return op.man.callFn(service, data, op.self)
+func (op *NativeOperator) Pid() uint32 {
+	return op.self.Id()
 }
 
-func (op *NativeOperator) ProviderManager() *ProviderManager[func(data []byte, caller service.Provider) ([]byte, error)] {
+func (op *NativeOperator) Proc() Process {
+	return op.self
+}
+
+func (op *NativeOperator) Call(service string, cap uuid.UUID, data []byte) ([]byte, error) {
+	return op.man.callFn(service, cap, data, op.self)
+}
+
+func (op *NativeOperator) ProviderManager() *provider.ProviderManager[func(data []byte, caller Process) ([]byte, error)] {
 	return op.self.providers
+}
+
+func TypedProvider[Arg any, Ret any](fn func(arg *Arg, caller Process) (*Ret, error)) func(data []byte, caller Process) ([]byte, error) {
+	return func(data []byte, caller Process) ([]byte, error) {
+		arg := new(Arg)
+		err := msgpack.Unmarshal(data, arg)
+		if err != nil {
+			return []byte{}, err
+		}
+		ret, err := fn(arg, caller)
+		if err != nil {
+			return []byte{}, err
+		}
+		retRaw, err := msgpack.Marshal(ret)
+		if err != nil {
+			return []byte{}, err
+		}
+		return retRaw, nil
+	}
 }
 
 func (man *Manager) NewNativeProcess(init func(ctx context.Context, op *NativeOperator) func() error) (*NativeProcess, error) {
@@ -43,7 +72,7 @@ func (man *Manager) NewNativeProcess(init func(ctx context.Context, op *NativeOp
 		host:      man.host,
 		pid:       pid,
 		quit:      sync.WaitGroup{},
-		providers: NewProviderManager[func(data []byte, caller service.Provider) ([]byte, error)](),
+		providers: provider.NewProviderManager[func(data []byte, caller Process) ([]byte, error)](),
 		cancel:    cancel,
 	}
 	proc.run = init(ctx, &NativeOperator{self: proc, man: man})
@@ -75,7 +104,7 @@ func (proc *NativeProcess) Kill() {
 	proc.cancel()
 }
 
-func (proc *NativeProcess) CallProvider(id uint32, data []byte, caller service.Provider) ([]byte, error) {
+func (proc *NativeProcess) CallProvider(id uint32, data []byte, caller Process) ([]byte, error) {
 	fn := proc.providers.Get(id)
 	if fn == nil {
 		return nil, ErrNotFound

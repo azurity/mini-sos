@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/azurity/mini-sos/go-core/node"
+	"github.com/azurity/mini-sos/go-core/utils/tree"
 	"github.com/google/uuid"
 	"github.com/vmihailenco/msgpack/v5"
 )
@@ -31,16 +32,24 @@ type extendWorkspaceArg struct {
 }
 
 type serviceArg struct {
-	Workspace WSID   `msgpack:"workspace"`
-	Process   uint32 `msgpack:"process"`
-	Entry     string `msgpack:"entry"`
+	Workspace WSID           `msgpack:"workspace"`
+	Desc      *tree.Transfer `msgpack:"desc,omitempty"`
 }
 
 type callArg struct {
 	Workspace WSID   `msgpack:"workspace"`
-	Entry     string `msgpack:"entry"`
+	Process   uint32 `msgpack:"process"`
+	Provider  uint32 `msgpack:"provider"`
 	Caller    uint32 `msgpack:"caller"`
 	Data      []byte `msgpack:"data"`
+}
+
+type broadcastArg struct {
+	Workspace WSID      `msgpack:"workspace"`
+	Entry     string    `msgpack:"entry"`
+	Cap       uuid.UUID `msgpack:"cap"`
+	Caller    uint32    `msgpack:"caller"`
+	Data      []byte    `msgpack:"data"`
 }
 
 func NewManager(network *node.Manager) *Manager {
@@ -58,10 +67,13 @@ func NewManager(network *node.Manager) *Manager {
 	network.Callback["releaseProcess"] = man.releaseProcess
 	network.Callback["syncProcess"] = man.syncProcess
 	// service operator
-	network.Callback["registerService"] = man.registerService
-	network.Callback["unregisterService"] = man.unregisterService
-	network.Callback["listService"] = man.listService
+	network.Callback["syncService"] = man.syncService
 	network.Callback["callService"] = man.callService
+	network.Callback["callBroadcast"] = man.callBroadcast
+	// network.Callback["registerService"] = man.registerService
+	// network.Callback["unregisterService"] = man.unregisterService
+	// network.Callback["listService"] = man.listService
+	// network.Callback["callService"] = man.callService
 	return man
 }
 
@@ -119,7 +131,8 @@ func (man *Manager) extendWorkspace(arg []byte, caller node.HostID) ([]byte, err
 	for _, remote := range remotes {
 		part, ok := ws.parts[remote.Host()]
 		if !ok {
-			part = ws.newRemotePart(remote)
+			part = newRemoteProcMan(ws, remote)
+			ws.parts[remote.Host()] = part
 		}
 		// sync process
 		arg, _ := msgpack.Marshal(parsedArg.Workspace)
@@ -131,12 +144,12 @@ func (man *Manager) extendWorkspace(arg []byte, caller node.HostID) ([]byte, err
 				pidMap := map[uint32]bool{}
 				for _, pid := range res {
 					pidMap[pid] = true
-					if _, ok := part.process[pid]; !ok {
+					if _, ok := part.AliveProcess[pid]; !ok {
 						part.createProcess(pid)
 					}
 				}
 				removes := []uint32{}
-				for pid := range part.process {
+				for pid := range part.AliveProcess {
 					if _, ok := pidMap[pid]; !ok {
 						removes = append(removes, pid)
 					}
@@ -147,29 +160,30 @@ func (man *Manager) extendWorkspace(arg []byte, caller node.HostID) ([]byte, err
 			}
 		}
 		// sync service
-		data, err = part.node.Call("listService", []byte{})
-		if err == nil {
-			res := []string{}
-			err := msgpack.Unmarshal(data, &res)
-			if err == nil {
-				entryMap := map[string]bool{}
-				for _, entry := range res {
-					entryMap[entry] = true
-					if _, ok := part.service.services[entry]; !ok {
-						part.service.services[entry] = 0
-					}
-				}
-				removes := []string{}
-				for entry := range part.service.services {
-					if _, ok := entryMap[entry]; !ok {
-						removes = append(removes, entry)
-					}
-				}
-				for _, entry := range removes {
-					delete(part.service.services, entry)
-				}
-			}
-		}
+		// TODO:
+		// data, err = part.node.Call("listService", []byte{})
+		// if err == nil {
+		// 	res := []string{}
+		// 	err := msgpack.Unmarshal(data, &res)
+		// 	if err == nil {
+		// 		entryMap := map[string]bool{}
+		// 		for _, entry := range res {
+		// 			entryMap[entry] = true
+		// 			if _, ok := part.service.services[entry]; !ok {
+		// 				part.service.services[entry] = 0
+		// 			}
+		// 		}
+		// 		removes := []string{}
+		// 		for entry := range part.service.services {
+		// 			if _, ok := entryMap[entry]; !ok {
+		// 				removes = append(removes, entry)
+		// 			}
+		// 		}
+		// 		for _, entry := range removes {
+		// 			delete(part.service.services, entry)
+		// 		}
+		// 	}
+		// }
 	}
 	return []byte{}, nil
 }
@@ -223,49 +237,49 @@ func (man *Manager) syncProcess(arg []byte, caller node.HostID) ([]byte, error) 
 		return nil, ErrUnknownWorkspace
 	}
 	list := []uint32{}
-	for it := range ws.local.processMan.AliveProcess {
+	for it := range ws.processes.AliveProcess {
 		list = append(list, it)
 	}
 	return msgpack.Marshal(list)
 }
 
-func (man *Manager) registerService(arg []byte, caller node.HostID) ([]byte, error) {
-	parsedArg := serviceArg{}
-	err := msgpack.Unmarshal(arg, &parsedArg)
-	if err != nil {
-		return nil, err
-	}
-	ws, ok := man.Workspaces[parsedArg.Workspace]
-	if !ok {
-		return nil, ErrUnknownWorkspace
-	}
-	part, ok := ws.parts[caller]
-	if !ok {
-		return nil, ErrUnknownRemote
-	}
-	part.service.services[parsedArg.Entry] = parsedArg.Process
-	return nil, err
-}
+// func (man *Manager) registerService(arg []byte, caller node.HostID) ([]byte, error) {
+// 	parsedArg := serviceArg{}
+// 	err := msgpack.Unmarshal(arg, &parsedArg)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	ws, ok := man.Workspaces[parsedArg.Workspace]
+// 	if !ok {
+// 		return nil, ErrUnknownWorkspace
+// 	}
+// 	part, ok := ws.parts[caller]
+// 	if !ok {
+// 		return nil, ErrUnknownRemote
+// 	}
+// 	part.service.services[parsedArg.Entry] = parsedArg.Process
+// 	return nil, err
+// }
 
-func (man *Manager) unregisterService(arg []byte, caller node.HostID) ([]byte, error) {
-	parsedArg := serviceArg{}
-	err := msgpack.Unmarshal(arg, &parsedArg)
-	if err != nil {
-		return nil, err
-	}
-	ws, ok := man.Workspaces[parsedArg.Workspace]
-	if !ok {
-		return nil, ErrUnknownWorkspace
-	}
-	part, ok := ws.parts[caller]
-	if !ok {
-		return nil, ErrUnknownRemote
-	}
-	delete(part.service.services, parsedArg.Entry)
-	return nil, err
-}
+// func (man *Manager) unregisterService(arg []byte, caller node.HostID) ([]byte, error) {
+// 	parsedArg := serviceArg{}
+// 	err := msgpack.Unmarshal(arg, &parsedArg)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	ws, ok := man.Workspaces[parsedArg.Workspace]
+// 	if !ok {
+// 		return nil, ErrUnknownWorkspace
+// 	}
+// 	part, ok := ws.parts[caller]
+// 	if !ok {
+// 		return nil, ErrUnknownRemote
+// 	}
+// 	delete(part.service.services, parsedArg.Entry)
+// 	return nil, err
+// }
 
-func (man *Manager) listService(arg []byte, caller node.HostID) ([]byte, error) {
+func (man *Manager) syncService(arg []byte, caller node.HostID) ([]byte, error) {
 	parsedArg := serviceArg{}
 	err := msgpack.Unmarshal(arg, &parsedArg)
 	if err != nil {
@@ -275,7 +289,10 @@ func (man *Manager) listService(arg []byte, caller node.HostID) ([]byte, error) 
 	if !ok {
 		return nil, ErrUnknownWorkspace
 	}
-	ret := ws.local.service.List(false)
+	ret, err := ws.service.Sync(parsedArg.Desc)
+	if err != nil {
+		return nil, err
+	}
 	return msgpack.Marshal(ret)
 }
 
@@ -293,9 +310,34 @@ func (man *Manager) callService(arg []byte, caller node.HostID) ([]byte, error) 
 	if !ok {
 		return nil, ErrUnknownRemote
 	}
-	proc, ok := part.process[parsedArg.Caller]
+	callerProc, ok := part.AliveProcess[parsedArg.Caller]
 	if !ok {
 		return nil, ErrUnknownProcess
 	}
-	return ws.local.service.Call(parsedArg.Entry, parsedArg.Data, proc)
+	providerProc, ok := ws.processes.AliveProcess[parsedArg.Process]
+	if !ok {
+		return nil, ErrUnknownProcess
+	}
+	return providerProc.CallProvider(parsedArg.Provider, parsedArg.Data, callerProc)
+}
+
+func (man *Manager) callBroadcast(arg []byte, caller node.HostID) ([]byte, error) {
+	parsedArg := broadcastArg{}
+	err := msgpack.Unmarshal(arg, &parsedArg)
+	if err != nil {
+		return nil, err
+	}
+	ws, ok := man.Workspaces[parsedArg.Workspace]
+	if !ok {
+		return nil, ErrUnknownWorkspace
+	}
+	part, ok := ws.parts[caller]
+	if !ok {
+		return nil, ErrUnknownRemote
+	}
+	callerProc, ok := part.AliveProcess[parsedArg.Caller]
+	if !ok {
+		return nil, ErrUnknownProcess
+	}
+	return ws.service.CallService(parsedArg.Entry, parsedArg.Cap, parsedArg.Data, callerProc)
 }

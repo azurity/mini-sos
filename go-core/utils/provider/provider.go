@@ -1,4 +1,4 @@
-package process
+package provider
 
 import (
 	"errors"
@@ -72,4 +72,16 @@ func (man *ProviderManager[T]) Get(id uint32) *T {
 
 func (man *ProviderManager[T]) Del(id uint32) {
 	man.release(id)
+}
+
+func Find[T comparable](man *ProviderManager[T], value T) *uint32 {
+	man.allocateLock.RLock()
+	defer man.allocateLock.RUnlock()
+	for k, v := range man.content {
+		if value == *v {
+			id := k
+			return &id
+		}
+	}
+	return nil
 }

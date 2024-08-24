@@ -1,49 +1,74 @@
 package service
 
-import "github.com/azurity/mini-sos/go-plugin/api"
-
-//go:generate msgp
-
-type RegisterArgs struct {
-	Service  string `msg:"service"`
-	Provider uint32 `msg:"provider"`
-}
-
-type UnregisterArgs struct {
-	Service string `msg:"service"`
-}
+import (
+	"github.com/azurity/mini-sos/go-plugin/api"
+	"github.com/azurity/mini-sos/go-plugin/service/capability"
+	"github.com/azurity/mini-sos/go-plugin/service/structs"
+	"github.com/google/uuid"
+)
 
 type Void struct{}
 
-type ServiceListRet []string
-
-func Register(entry string, provider uint32) bool {
-	_, err := api.CallService[Void]("/service/register", &RegisterArgs{
-		Service:  entry,
-		Provider: provider,
+func Register(path string, local bool) error {
+	res, err := api.CallService[structs.RegisterRes]("/service/register", capability.CapCall, &structs.RegisterReq{
+		Path:  path,
+		Local: local,
 	})
-	return err != nil
-}
-
-func Update(entry string, provider uint32) bool {
-	_, err := api.CallService[Void]("/service/update", &RegisterArgs{
-		Service:  entry,
-		Provider: provider,
-	})
-	return err != nil
-}
-
-func Unregister(entry string) bool {
-	_, err := api.CallService[Void]("/service/unregister", &UnregisterArgs{
-		Service: entry,
-	})
-	return err != nil
-}
-
-func List() []string {
-	ret, err := api.CallService[ServiceListRet]("/service/list", nil)
 	if err != nil {
-		return nil
+		return err
 	}
-	return *ret
+	return res.Err()
+}
+
+func Unregister(path string) error {
+	arg := structs.UnregisterReq(path)
+	res, err := api.CallService[structs.UnregisterRes]("/service/unregister", capability.CapCall, &arg)
+	if err != nil {
+		return err
+	}
+	return res.Err()
+}
+
+func AddCap(path string, cap uuid.UUID, provider uint32) error {
+	res, err := api.CallService[structs.AddCapRes]("/service/cap/add", capability.CapCall, &structs.AddCapReq{
+		Path: path,
+		Desc: structs.Cap{
+			Name:     api.UUID(cap),
+			Host:     api.UUID(uuid.Nil),
+			Process:  0,
+			Provider: provider,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return res.Err()
+}
+
+func DelCap(path string, cap uuid.UUID) error {
+	res, err := api.CallService[structs.DelCapRes]("/service/cap/del", capability.CapCall, &structs.DelCapReq{
+		Path: path,
+		Cap:  api.UUID(cap),
+	})
+	if err != nil {
+		return err
+	}
+	return res.Err()
+}
+
+func ListCap(path string, cap uuid.UUID) ([]uuid.UUID, error) {
+	res, err := api.CallService[structs.ListCapRes]("/service/cap/list", capability.CapCall, &structs.ListCapReq{
+		Path: path,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if res.Error.Err() != nil {
+		return nil, res.Error.Err()
+	}
+	ret := []uuid.UUID{}
+	for _, cap := range res.Caps {
+		ret = append(ret, uuid.UUID(cap.Name))
+	}
+	return ret, nil
 }

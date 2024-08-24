@@ -97,7 +97,7 @@ type RouteInfo struct {
 }
 
 func NewManager() (*Manager, error) {
-	host, err := uuid.NewUUID()
+	host, err := uuid.NewV7()
 	if err != nil {
 		return nil, err
 	}

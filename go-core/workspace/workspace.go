@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/azurity/mini-sos/go-core/node"
+	"github.com/azurity/mini-sos/go-core/process"
 	"github.com/azurity/mini-sos/go-core/service"
 	"github.com/google/uuid"
 	"github.com/vmihailenco/msgpack/v5"
@@ -12,10 +13,12 @@ import (
 var ErrSelf = errors.New("cannot remove self node")
 
 type Workspace struct {
-	id      WSID
-	service *service.GroupManager
-	local   *LocalPart
-	parts   map[node.HostID]*RemotePart
+	id        WSID
+	man       *Manager
+	processes *process.Manager
+	service   *service.Manager
+	local     node.HostID
+	parts     map[node.HostID]*remoteProcMan
 }
 
 func (man *Manager) NewWorkspace() (*Workspace, error) {
@@ -24,7 +27,7 @@ func (man *Manager) NewWorkspace() (*Workspace, error) {
 
 func (man *Manager) newWorkspace(preAllocatedId WSID) (*Workspace, error) {
 	host := man.network.HostId
-	id, err := uuid.NewUUID()
+	id, err := uuid.NewV7()
 	if err != nil {
 		return nil, err
 	}
@@ -32,58 +35,82 @@ func (man *Manager) newWorkspace(preAllocatedId WSID) (*Workspace, error) {
 		id = preAllocatedId
 	}
 	ws := &Workspace{
-		id: id,
-		service: &service.GroupManager{
-			Instance: map[uuid.UUID]service.Manager{},
-		},
-		local: nil,
-		parts: map[node.HostID]*RemotePart{},
+		id:        id,
+		man:       man,
+		processes: nil,
+		service:   nil,
+		local:     preAllocatedId,
+		parts:     map[node.HostID]*remoteProcMan{},
 	}
-	local, err := newLocalPart(host, ws.service)
-	if err != nil {
+	ws.service = service.NewManager(host)
+	ws.processes = process.NewManager(host, ws.service.CallService)
+	if err := ws.service.Init(ws.processes, ws.callRemoteProvider, ws.callBroadcast, ws.newRemoteProcess); err != nil {
 		return nil, err
 	}
-	ws.local = local
-	man.Workspaces[id] = ws
-
-	local.processMan.CreateCallback = func(pid uint32) {
-		proc, ok := local.processMan.AliveProcess[pid]
-		if !ok {
-			return
-		}
-		arg, err := msgpack.Marshal(processArg{
-			Workspace: ws.id,
-			Process:   pid,
-		})
-		if err != nil {
-			return
-		}
-		for _, part := range ws.parts {
-			part.node.Call("createProcess", arg)
-		}
-		go func() {
-			proc.WaitQuit()
-			for _, part := range ws.parts {
-				part.node.Call("releaseProcess", arg)
-			}
-		}()
-	}
 	return ws, nil
+}
+
+func (workspace *Workspace) callBroadcast(entry string, cap uuid.UUID, data []byte, caller service.CallerInfo) {
+	for id := range workspace.parts {
+		if node, ok := workspace.man.network.Nodes[id]; ok {
+			arg := broadcastArg{
+				Workspace: workspace.id,
+				Entry:     entry,
+				Cap:       cap,
+				Caller:    caller.Process,
+				Data:      data,
+			}
+			data, _ := msgpack.Marshal(arg)
+			node.Call("callBroadcast", data)
+		}
+	}
+}
+
+func (workspace *Workspace) callRemoteProvider(host node.HostID, process uint32, provider uint32, data []byte, caller service.CallerInfo) ([]byte, error) {
+	if _, ok := workspace.parts[host]; !ok {
+		return []byte{}, ErrUnknownRemote
+	}
+	if node, ok := workspace.man.network.Nodes[host]; ok {
+		arg := callArg{
+			Workspace: workspace.id,
+			Process:   process,
+			Provider:  provider,
+			Caller:    caller.Process,
+			Data:      data,
+		}
+		data, _ := msgpack.Marshal(arg)
+		return node.Call("callProvider", data)
+	}
+	return []byte{}, ErrUnknownRemote
+}
+
+func (workspace *Workspace) newRemoteProcess(caller service.CallerInfo) (process.Process, error) {
+	procMan, ok := workspace.parts[caller.Host]
+	if !ok {
+		return nil, ErrUnknownRemote
+	}
+	if proc, ok := procMan.AliveProcess[caller.Process]; ok {
+		return proc, nil
+	}
+	return nil, ErrUnknownProcess
 }
 
 func (workspace *Workspace) Id() WSID {
 	return workspace.id
 }
 
-func (workspace *Workspace) Local() *LocalPart {
-	return workspace.local
+func (workspace *Workspace) ProcMan() *process.Manager {
+	return workspace.processes
 }
 
 func (workspace *Workspace) AddNode(n node.Node) {
-	workspace.newRemotePart(n)
+	if _, ok := workspace.parts[n.Host()]; ok || n.Host() == workspace.local {
+		return
+	}
+	workspace.parts[n.Host()] = &remoteProcMan{}
 	arg := extendWorkspaceArg{
 		Workspace: workspace.id,
-		Parts:     []node.HostID{workspace.local.host()},
+		Parts:     []node.HostID{workspace.local},
 	}
 	for it := range workspace.parts {
 		arg.Parts = append(arg.Parts, it)
@@ -93,36 +120,41 @@ func (workspace *Workspace) AddNode(n node.Node) {
 }
 
 func (workspace *Workspace) DelNode(n node.Node) error {
-	if n.Host() == workspace.local.host() {
+	if n.Host() == workspace.local {
 		return ErrSelf
 	}
-	part, ok := workspace.parts[n.Host()]
-	if !ok {
+	if _, ok := workspace.parts[n.Host()]; !ok {
 		return ErrUnknownRemote
 	}
-	for _, part := range workspace.parts {
-		arg := extendWorkspaceArg{
-			Workspace: workspace.id,
-			Parts:     []node.HostID{n.Host()},
-		}
-		data, _ := msgpack.Marshal(arg)
-		part.node.Call("reduceWorkspace", data)
+	arg := extendWorkspaceArg{
+		Workspace: workspace.id,
+		Parts:     []node.HostID{n.Host()},
 	}
-	part.close()
+	data, _ := msgpack.Marshal(arg)
+	for part := range workspace.parts {
+		if node, ok := workspace.man.network.Nodes[part]; ok {
+			node.Call("reduceWorkspace", data)
+		}
+	}
+	delete(workspace.parts, n.Host())
 	return nil
 }
 
 func (workspace *Workspace) Close() {
 	arg, _ := msgpack.Marshal(workspace.id)
-	for _, part := range workspace.parts {
-		part.node.Call("closeWorkspace", arg)
+	for part := range workspace.parts {
+		if node, ok := workspace.man.network.Nodes[part]; ok {
+			node.Call("closeWorkspace", arg)
+		}
 	}
 	workspace.closeImpl()
 }
 
 func (workspace *Workspace) closeImpl() {
-	workspace.local.close()
-	for _, part := range workspace.parts {
-		part.close()
+	for _, proc := range workspace.processes.AliveProcess {
+		proc.Kill()
+	}
+	for _, man := range workspace.parts {
+		man.close()
 	}
 }
